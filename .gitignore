@@ -1,4 +1,7 @@
-html/
+exports/*
+!exports/.gitkeep
 venv/
 dashboard_onpe.html
 resultados_onpe.json
+*.pyc
+__pycache__/

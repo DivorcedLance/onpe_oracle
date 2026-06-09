@@ -3,433 +3,47 @@ import asyncio
 import os
 import webbrowser
 import re
+from datetime import datetime
 from playwright.async_api import async_playwright
 
 URL = "https://resultadosegundavuelta.onpe.gob.pe/main/presidenciales"
 
-# === TEMPLATE HTML PROPORCIONADO ===
-HTML_TEMPLATE = """<!DOCTYPE html>
-<html lang="es">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Dashboard ONPE Quant - Análisis JEE Avanzado</title>
-    <style>
-        :root {
-            --bg-color: #0b0f19; --card-bg: #1e293b; --text-main: #f8fafc;
-            --text-muted: #94a3b8; --accent: #3b82f6; --sanchez-color: #10b981;
-            --keiko-color: #f97316; --jee-color: #8b5cf6; --border-color: #334155; 
-            --table-header: #0f172a;
-        }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            background-color: var(--bg-color); color: var(--text-main);
-            margin: 0; padding: 20px; display: flex; flex-direction: column; align-items: center;
-        }
-        .container { width: 100%; max-width: 1500px; }
-        .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 15px; margin-bottom: 15px; }
-        .card { background: var(--card-bg); padding: 20px; border-radius: 12px; border: 1px solid var(--border-color); }
-        h1, h2 { margin-top: 0; color: var(--text-main); }
-        textarea {
-            width: 100%; height: 60px; background: #0f172a; color: #fff;
-            border: 1px solid var(--border-color); border-radius: 8px; padding: 10px;
-            font-family: monospace; box-sizing: border-box; resize: vertical;
-        }
-        button {
-            width: 100%; padding: 10px; background: var(--accent); color: white;
-            border: none; border-radius: 8px; font-weight: bold; cursor: pointer; margin-top: 10px; transition: 0.2s;
-        }
-        button:hover { filter: brightness(1.1); }
-        .metric-big { font-size: 32px; font-weight: bold; margin-top: 8px; text-align: center; }
-        .metric-label { font-size: 13px; color: var(--text-muted); text-align: center; text-transform: uppercase; font-weight: 600;}
-        
-        .toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; padding: 0 5px; flex-wrap: wrap; gap: 10px; }
-        .search-box {
-            padding: 8px 12px; border-radius: 6px; border: 1px solid var(--border-color);
-            background: #0f172a; color: white; width: 250px;
-        }
-        
-        .checkbox-wrapper {
-            display: flex; align-items: center; gap: 8px; font-size: 14px;
-            background: var(--table-header); padding: 8px 12px; border-radius: 6px; border: 1px solid var(--border-color);
-            cursor: pointer; user-select: none;
-        }
-        .checkbox-wrapper input { cursor: pointer; }
+EXPORT_DIR = "exports"
+TEMPLATE_DIR = "templates"
 
-        /* Estilos Controles JEE */
-        .toggle-group { display: flex; gap: 5px; margin-top: 10px; justify-content: center; }
-        .btn-toggle { width: auto; padding: 6px 15px; margin: 0; font-size: 13px; background: var(--table-header); border: 1px solid var(--border-color); color: var(--text-muted); }
-        .btn-toggle.active { background: var(--jee-color); color: white; border-color: var(--jee-color); }
-        
-        input[type=range] { -webkit-appearance: none; width: 100%; background: transparent; transition: opacity 0.3s; }
-        input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; height: 20px; width: 20px; border-radius: 50%; background: var(--text-main); cursor: pointer; margin-top: -6px; box-shadow: 0 0 5px rgba(0,0,0,0.5);}
-        input[type=range]::-webkit-slider-runnable-track { width: 100%; height: 8px; cursor: pointer; background: linear-gradient(to right, var(--sanchez-color), var(--keiko-color)); border-radius: 4px; border: 1px solid var(--border-color);}
-        input[type=range]:disabled { cursor: not-allowed; opacity: 0.3; }
+os.makedirs(EXPORT_DIR, exist_ok=True)
 
-        .table-responsive { width: 100%; max-height: 600px; overflow: auto; border-radius: 8px; border: 1px solid var(--border-color); }
-        table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 1500px; }
-        th, td { padding: 8px 10px; text-align: right; border-bottom: 1px solid var(--border-color); }
-        th { 
-            background: var(--table-header); color: var(--text-muted); font-weight: 600; 
-            white-space: nowrap; position: sticky; top: 0; cursor: pointer; user-select: none; z-index: 2;
-        }
-        th:hover { color: white; background: #1e293b; }
-        td:first-child, th:first-child { text-align: left; font-weight: bold; position: sticky; left: 0; background: var(--card-bg); z-index: 1;}
-        th:first-child { background: var(--table-header); z-index: 3;}
-        
-        tfoot td { background: var(--table-header); font-weight: bold; color: white; position: sticky; bottom: 0; z-index: 2; border-top: 2px solid var(--accent); }
-        tfoot td:first-child { z-index: 3; }
+def load_html_template():
+    template_path = os.path.join(TEMPLATE_DIR, "dashboard.html")
+    with open(template_path, "r", encoding="utf-8") as f:
+        return f.read()
 
-        .col-jp { background-color: rgba(16, 185, 129, 0.05); }
-        .col-k { background-color: rgba(249, 115, 22, 0.05); }
-        .col-jee { background-color: rgba(139, 92, 246, 0.05); border-left: 1px dashed var(--jee-color); border-right: 1px dashed var(--jee-color);}
-        .text-jp { color: var(--sanchez-color); font-weight: bold; }
-        .text-k { color: var(--keiko-color); font-weight: bold; }
-    </style>
-</head>
-<body>
-
-<div class="container">
-    <h1 style="text-align: center; color: var(--accent);">📊 ONPE Quant - Análisis de Sensibilidad (JEE)</h1>
-    
-    <div class="card" style="margin-bottom: 15px; display: none;" id="inputContainer">
-        <!-- El textarea se rellenará y ocultará automáticamente -->
-        <textarea id="jsonInput" placeholder="Pega el arreglo JSON estructurado aquí..."></textarea>
-        <button onclick="procesarJSON()">Cargar Datos Base</button>
-    </div>
-
-    <!-- Panel de Macros -->
-    <div class="grid-3">
-        <div class="card" style="border-top: 4px solid var(--sanchez-color);" id="winnerCard">
-            <div class="metric-label">Ganador Proyectado Final</div>
-            <div id="winnerName" class="metric-big">--</div>
-            <div id="finalGap" style="text-align: center; margin-top: 5px; font-size: 16px; font-weight: bold;">IDiff Total: --</div>
-        </div>
-        <div class="card" style="border-top: 4px solid var(--accent);">
-            <div class="metric-label">Pendientes ONPE (Regulares)</div>
-            <div id="totalPendingVotes" class="metric-big" style="color: var(--accent);">--</div>
-            <div style="text-align: center; margin-top: 5px; font-size: 12px; color: var(--text-muted);">Votos por contabilizar</div>
-        </div>
-        <div class="card" style="border-top: 4px solid var(--jee-color);">
-            <div class="metric-label">Pendientes JEE (Impugnadas)</div>
-            <div id="totalJeeVotes" class="metric-big" style="color: var(--jee-color);">--</div>
-            <div style="text-align: center; margin-top: 5px; font-size: 12px; color: var(--text-muted);">Votos en revisión de actas</div>
-        </div>
-    </div>
-
-    <!-- Panel de Stress Test JEE -->
-    <div class="card" style="border: 2px solid var(--jee-color); margin-bottom: 20px;">
-        <div class="metric-label" style="color: var(--text-main);">⚡ Asignación de Votos del Jurado Electoral (JEE)</div>
-        
-        <div class="toggle-group">
-            <button id="btnModoSlider" class="btn-toggle active" onclick="setModoJee(true)">Control Global (Slider)</button>
-            <button id="btnModoRegional" class="btn-toggle" onclick="setModoJee(false)">Escalado por Región (Histórico)</button>
-        </div>
-
-        <div style="display: flex; align-items: center; gap: 20px; margin-top: 15px;">
-            <div style="font-weight:bold; font-size:18px; width: 60px; text-align:right;" class="text-jp">JP</div>
-            <input type="range" id="jeeSlider" min="0" max="100" step="0.1" value="50" oninput="aplicarFiltrosYRenderizar()" style="flex:1;">
-            <div style="font-weight:bold; font-size:18px; width: 60px; text-align:left;" class="text-k">K</div>
-        </div>
-        
-        <div style="text-align: center; margin-top: 8px; font-size: 15px; font-family: monospace;" id="jeeLabels">
-            Votos JEE a JP: <span id="lblJeeJP" class="text-jp">50.0%</span> &nbsp;&nbsp;|&nbsp;&nbsp; Votos JEE a K: <span id="lblJeeK" class="text-k">50.0%</span>
-        </div>
-    </div>
-
-    <div class="card" style="padding: 0; border: none; background: transparent;">
-        <div class="toolbar">
-            <h2 style="margin:0;">Matriz de Proyección</h2>
-            <div style="display: flex; gap: 15px; align-items: center;">
-                <label class="checkbox-wrapper">
-                    <input type="checkbox" id="hideCompleted" onchange="aplicarFiltrosYRenderizar()"> 
-                    Ocultar completados (Sin Pend ni JEE)
-                </label>
-                <input type="text" id="searchInput" class="search-box" placeholder="🔍 Filtrar región..." onkeyup="aplicarFiltrosYRenderizar()">
-            </div>
-        </div>
-        <div class="table-responsive">
-            <table>
-                <thead>
-                    <tr>
-                        <th onclick="ordenarPor('region')">Región ↕</th>
-                        <th onclick="ordenarPor('totalActas')">Tot.Actas ↕</th>
-                        <th onclick="ordenarPor('pctPend')">%Pend ↕</th>
-                        <th onclick="ordenarPor('pend')">Pend ↕</th>
-                        <th onclick="ordenarPor('pctJEE')" class="col-jee">%JEE ↕</th>
-                        <th onclick="ordenarPor('pendJEE')" class="col-jee">Pend JEE ↕</th>
-                        <th class="col-jp" onclick="ordenarPor('pctJP')">%JP ↕</th>
-                        <th class="col-k" onclick="ordenarPor('pctK')">%K ↕</th>
-                        <th onclick="ordenarPor('proyJP')">ProyJP ↕</th>
-                        <th onclick="ordenarPor('proyK')">ProyK ↕</th>
-                        <th onclick="ordenarPor('proyB')">ProyB ↕</th>
-                        <th onclick="ordenarPor('acDiff')">AcDiff ↕</th>
-                        <th onclick="ordenarPor('proyDiff')">ProyDiff ↕</th>
-                        <th onclick="ordenarPor('jeeDiff')" class="col-jee">JeeDiff ↕</th>
-                        <th onclick="ordenarPor('iDiffTotal')">IDiff Final ↕</th>
-                    </tr>
-                </thead>
-                <tbody id="regionesTableBody">
-                    <tr><td colspan="15" style="text-align: center; color: var(--text-muted); padding: 20px;">Esperando datos JSON...</td></tr>
-                </tbody>
-                <tfoot id="tableFooter" style="display: none;"></tfoot>
-            </table>
-        </div>
-    </div>
-</div>
-
-<script>
-    let datosProcesados = [];
-    let sortColumna = 'region';
-    let sortAscendente = true;
-    let modoJeeGlobal = true; 
-
-    function setModoJee(isGlobal) {
-        modoJeeGlobal = isGlobal;
-        const slider = document.getElementById('jeeSlider');
-        document.getElementById('btnModoSlider').className = isGlobal ? 'btn-toggle active' : 'btn-toggle';
-        document.getElementById('btnModoRegional').className = !isGlobal ? 'btn-toggle active' : 'btn-toggle';
-        slider.disabled = !isGlobal;
-        aplicarFiltrosYRenderizar();
-    }
-
-    function procesarJSON() {
-        const rawJson = document.getElementById('jsonInput').value;
-        if (!rawJson.trim()) return alert("Por favor pega el JSON copiado antes de continuar.");
-        
-        let data;
-        try { data = JSON.parse(rawJson); } 
-        catch (e) { return alert("Error en el formato JSON."); }
-
-        datosProcesados = []; 
-
-        data.forEach(reg => {
-            if (!reg.actas) return;
-
-            let numTotalActas = parseInt(reg.actas.total.replace(/,/g, '')) || 0;
-            let pctPend = parseFloat(reg.actas.pendientes?.replace('%', '').trim()) || 0;
-            let pctJEE = parseFloat(reg.actas.envioJEE?.replace('%', '').trim()) || 0;
-
-            let votosActJP = 0, pctJP = 0, pctEmitidoJP = 0;
-            let votosActK = 0, pctK = 0, pctEmitidoK = 0;
-            let tieneCandidatos = reg.candidatos && reg.candidatos.length >= 2;
-
-            if (tieneCandidatos) {
-                let dJP = reg.candidatos.find(c => c.nombre && c.nombre.includes("SANCHEZ"));
-                let dK = reg.candidatos.find(c => c.nombre && c.nombre.includes("FUJIMORI"));
-                
-                if (dJP) { 
-                    votosActJP = parseInt(dJP.votos.replace(/,/g, '')) || 0; 
-                    pctJP = parseFloat(dJP.votosValidos?.replace('%', '').trim()) || 0; 
-                    pctEmitidoJP = parseFloat(dJP.votosEmitidos?.replace('%', '').trim()) || 0;
-                }
-                if (dK) { 
-                    votosActK = parseInt(dK.votos.replace(/,/g, '')) || 0; 
-                    pctK = parseFloat(dK.votosValidos?.replace('%', '').trim()) || 0; 
-                    pctEmitidoK = parseFloat(dK.votosEmitidos?.replace('%', '').trim()) || 0;
-                }
-            }
-
-            let acDiff = votosActJP - votosActK;
-            let densidadActa = (reg.region === "Extranjero") ? 150 : 210;
-            
-            let actasPendientesNum = (numTotalActas * pctPend) / 100;
-            let pend = Math.round(actasPendientesNum * densidadActa);
-
-            let actasJeeNum = (numTotalActas * pctJEE) / 100;
-            let pendJEE = Math.round(actasJeeNum * densidadActa);
-            
-            let proyJP = 0, proyK = 0, proyB = 0, proyDiff = 0;
-
-            if (pctPend > 0 && tieneCandidatos) {
-                proyJP = Math.round(pend * (pctEmitidoJP / 100));
-                proyK = Math.round(pend * (pctEmitidoK / 100));
-                proyB = pend - proyJP - proyK; 
-                proyDiff = proyJP - proyK;
-            }
-
-            datosProcesados.push({
-                region: reg.region,
-                totalActas: numTotalActas,
-                pctPend: pctPend,
-                pend: pend,
-                pctJEE: pctJEE,
-                pendJEE: pendJEE,
-                pctJP: pctJP,
-                pctK: pctK,
-                pctEmitidoJP: pctEmitidoJP, 
-                pctEmitidoK: pctEmitidoK,   
-                proyJP: proyJP,
-                proyK: proyK,
-                proyB: proyB,
-                acDiff: acDiff,
-                proyDiff: proyDiff,
-                tieneCandidatos: tieneCandidatos,
-                jeeDiff: 0,
-                iDiffTotal: 0
-            });
-        });
-
-        aplicarFiltrosYRenderizar();
-    }
-
-    function ordenarPor(columna) {
-        if (sortColumna === columna) { sortAscendente = !sortAscendente; } 
-        else { sortColumna = columna; sortAscendente = true; }
-        aplicarFiltrosYRenderizar();
-    }
-
-    function formatNumber(num) { return num === 0 ? "-" : num.toLocaleString('en-US'); }
-    function formatDiff(num) { 
-        if (num === 0) return "-";
-        return num > 0 ? `<span class="text-jp">+${num.toLocaleString('en-US')}</span>` : `<span class="text-k">${num.toLocaleString('en-US')}</span>`; 
-    }
-
-    function aplicarFiltrosYRenderizar() {
-        if(datosProcesados.length === 0) return;
-
-        const sliderValJP = parseFloat(document.getElementById('jeeSlider').value);
-        const sliderValK = 100 - sliderValJP;
-        
-        if (modoJeeGlobal) {
-            document.getElementById('jeeLabels').innerHTML = `Votos JEE a JP: <span class="text-jp">${sliderValJP.toFixed(1)}%</span> &nbsp;&nbsp;|&nbsp;&nbsp; Votos JEE a K: <span class="text-k">${sliderValK.toFixed(1)}%</span>`;
-        } else {
-            document.getElementById('jeeLabels').innerHTML = `<span style="color:var(--jee-color);">Asignando según la tendencia (votos emitidos) de cada región individualmente.</span>`;
-        }
-
-        let totalPendNacional = 0;
-        let totalJeeNacional = 0;
-        let IDiffNacionalTotal = 0;
-
-        datosProcesados.forEach(row => {
-            let proyJeeJP = 0;
-            let proyJeeK = 0;
-
-            if (row.pendJEE > 0 && row.tieneCandidatos) {
-                if (modoJeeGlobal) {
-                    proyJeeJP = Math.round(row.pendJEE * (sliderValJP / 100));
-                    proyJeeK = Math.round(row.pendJEE * (sliderValK / 100));
-                } else {
-                    proyJeeJP = Math.round(row.pendJEE * (row.pctEmitidoJP / 100));
-                    proyJeeK = Math.round(row.pendJEE * (row.pctEmitidoK / 100));
-                }
-            }
-
-            row.jeeDiff = proyJeeJP - proyJeeK;
-            row.iDiffTotal = row.acDiff + row.proyDiff + row.jeeDiff;
-
-            totalPendNacional += row.pend;
-            totalJeeNacional += row.pendJEE;
-            IDiffNacionalTotal += row.iDiffTotal;
-        });
-
-        document.getElementById('totalPendingVotes').innerText = totalPendNacional.toLocaleString('en-US');
-        document.getElementById('totalJeeVotes').innerText = totalJeeNacional.toLocaleString('en-US');
-        
-        const winCard = document.getElementById('winnerCard');
-        if (IDiffNacionalTotal > 0) {
-            document.getElementById('winnerName').innerText = "SÁNCHEZ (JP)";
-            document.getElementById('winnerName').style.color = "var(--sanchez-color)";
-            document.getElementById('finalGap').innerText = `IDiff Total: +${IDiffNacionalTotal.toLocaleString('en-US')} votos`;
-            winCard.style.borderTop = "4px solid var(--sanchez-color)";
-        } else {
-            document.getElementById('winnerName').innerText = "KEIKO (FP)";
-            document.getElementById('winnerName').style.color = "var(--keiko-color)";
-            document.getElementById('finalGap').innerText = `IDiff Total: +${Math.abs(IDiffNacionalTotal).toLocaleString('en-US')} votos`;
-            winCard.style.borderTop = "4px solid var(--keiko-color)";
-        }
-
-        const query = document.getElementById('searchInput').value.toLowerCase();
-        const hideCompleted = document.getElementById('hideCompleted').checked;
-
-        let dataFiltrada = datosProcesados.filter(row => {
-            const pasaBusqueda = row.region.toLowerCase().includes(query);
-            const pasaCheckbox = hideCompleted ? (row.pctPend > 0 || row.pctJEE > 0) : true;
-            return pasaBusqueda && pasaCheckbox;
-        });
-
-        dataFiltrada.sort((a, b) => {
-            let valA = a[sortColumna];
-            let valB = b[sortColumna];
-            if (typeof valA === 'string') valA = valA.toLowerCase();
-            if (typeof valB === 'string') valB = valB.toLowerCase();
-            if (valA < valB) return sortAscendente ? -1 : 1;
-            if (valA > valB) return sortAscendente ? 1 : -1;
-            return 0;
-        });
-
-        let tablaHtml = "";
-        let sActas=0, sPend=0, sPendJEE=0, sProyJP=0, sProyK=0, sProyB=0, sAcDiff=0, sProyDiff=0, sJeeDiff=0, sIDiff=0;
-
-        dataFiltrada.forEach(row => {
-            sActas+=row.totalActas; sPend+=row.pend; sPendJEE+=row.pendJEE;
-            sProyJP+=row.proyJP; sProyK+=row.proyK; sProyB+=row.proyB;
-            sAcDiff+=row.acDiff; sProyDiff+=row.proyDiff; sJeeDiff+=row.jeeDiff; sIDiff+=row.iDiffTotal;
-
-            tablaHtml += `
-                <tr>
-                    <td>${row.region}</td>
-                    <td>${formatNumber(row.totalActas)}</td>
-                    <td style="font-weight: bold; color: ${row.pctPend > 0 ? 'var(--text-main)' : 'var(--text-muted)'}">${row.pctPend.toFixed(3)}%</td>
-                    <td>${formatNumber(row.pend)}</td>
-                    <td class="col-jee" style="color: ${row.pctJEE > 0 ? '#c4b5fd' : 'var(--text-muted)'}">${row.pctJEE.toFixed(3)}%</td>
-                    <td class="col-jee" style="font-weight:bold;">${formatNumber(row.pendJEE)}</td>
-                    <td class="col-jp">${row.pctJP.toFixed(3)}%</td>
-                    <td class="col-k">${row.pctK.toFixed(3)}%</td>
-                    <td>${formatNumber(row.proyJP)}</td>
-                    <td>${formatNumber(row.proyK)}</td>
-                    <td>${formatNumber(row.proyB)}</td>
-                    <td style="background: rgba(255,255,255,0.01); border-left: 1px solid var(--border-color);">${formatDiff(row.acDiff)}</td>
-                    <td>${formatDiff(row.proyDiff)}</td>
-                    <td class="col-jee">${formatDiff(row.jeeDiff)}</td>
-                    <td style="background: rgba(255,255,255,0.03); border-left: 1px solid var(--border-color);">${formatDiff(row.iDiffTotal)}</td>
-                </tr>
-            `;
-        });
-
-        document.getElementById('regionesTableBody').innerHTML = tablaHtml || `<tr><td colspan="15" style="text-align: center;">No hay coincidencias</td></tr>`;
-        
-        if (dataFiltrada.length > 0) {
-            document.getElementById('tableFooter').style.display = "table-footer-group";
-            document.getElementById('tableFooter').innerHTML = `
-                <tr>
-                    <td>TOTALES (Visibles)</td>
-                    <td>${formatNumber(sActas)}</td>
-                    <td>-</td>
-                    <td>${formatNumber(sPend)}</td>
-                    <td class="col-jee">-</td>
-                    <td class="col-jee">${formatNumber(sPendJEE)}</td>
-                    <td class="col-jp">-</td>
-                    <td class="col-k">-</td>
-                    <td>${formatNumber(sProyJP)}</td>
-                    <td>${formatNumber(sProyK)}</td>
-                    <td>${formatNumber(sProyB)}</td>
-                    <td style="border-left: 1px solid var(--border-color);">${formatDiff(sAcDiff)}</td>
-                    <td>${formatDiff(sProyDiff)}</td>
-                    <td class="col-jee">${formatDiff(sJeeDiff)}</td>
-                    <td style="border-left: 1px solid var(--border-color);">${formatDiff(sIDiff)}</td>
-                </tr>
-            `;
-        } else {
-            document.getElementById('tableFooter').style.display = "none";
-        }
-    }
-    
-    // --- AUTORUN AL CARGAR LA PÁGINA ---
-    window.onload = procesarJSON;
-</script>
-</body>
-</html>
-"""
+def timestamp_str():
+    return datetime.now().strftime("%Y%m%d_%H%M%S")
 
 async def scrape_onpe_results():
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=False)
-        page = await browser.new_page()
+        browser = await p.chromium.launch(
+            headless=True,
+            args=[
+                "--disable-blink-features=AutomationControlled",
+                "--no-sandbox",
+                "--disable-web-security",
+            ]
+        )
+        page = await browser.new_page(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+        )
+        
+        await page.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', { get: () => false });
+            Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+            Object.defineProperty(navigator, 'languages', { get: () => ['es-PE', 'es', 'en'] });
+        """)
         
         print(f"Conectando a {URL}...")
-        await page.goto(URL, wait_until="networkidle")
-        await page.wait_for_selector("app-generic-filter-ubigeo")
+        await page.goto(URL, wait_until="networkidle", timeout=60000)
+        await page.wait_for_selector("app-generic-filter-ubigeo", timeout=30000)
         
         results = []
         region_select = page.locator('mat-select[formcontrolname="region"]')
@@ -485,27 +99,27 @@ async def scrape_onpe_results():
             dept_data = await extract_current_page_data(page, dept)
             results.append(dept_data)
 
-        # Guardamos el archivo JSON clásico por si lo necesitas
-        with open("resultados_onpe.json", "w", encoding="utf-8") as f:
+        ts = timestamp_str()
+
+        json_filename = f"resultados_onpe_{ts}.json"
+        json_path = os.path.join(EXPORT_DIR, json_filename)
+        with open(json_path, "w", encoding="utf-8") as f:
             json.dump(results, f, ensure_ascii=False, indent=4)
         
+        print(f"JSON guardado: {json_path}")
         print("¡Extracción completada! Generando Dashboard HTML...")
         
-        # Convertimos los resultados a un string de JSON
         json_data = json.dumps(results, ensure_ascii=False)
+        html_template = load_html_template()
+        html_content = html_template.replace("{{JSON_DATA}}", json_data)
         
-        # Inyectamos el JSON directamente dentro del textarea del template
-        html_content = HTML_TEMPLATE.replace(
-            '<textarea id="jsonInput" placeholder="Pega el arreglo JSON estructurado aquí..."></textarea>',
-            f'<textarea id="jsonInput" style="display:none;">{json_data}</textarea>'
-        )
-        
-        # Guardamos y abrimos el Dashboard
-        html_path = os.path.abspath("dashboard_onpe.html")
+        html_filename = f"dashboard_onpe_{ts}.html"
+        html_path = os.path.abspath(os.path.join(EXPORT_DIR, html_filename))
         with open(html_path, "w", encoding="utf-8") as f:
             f.write(html_content)
             
-        print(f"Abriendo el dashboard interactivo en tu navegador: {html_path}")
+        print(f"Dashboard generado: {html_path}")
+        print(f"Abriendo el dashboard interactivo en tu navegador...")
         webbrowser.open(f"file://{html_path}")
         
         await browser.close()
